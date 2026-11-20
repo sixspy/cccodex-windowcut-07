@@ -1,6 +1,7 @@
 """窗口锁与争用登记（公共并发面，题面争用句应对得上）。"""
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
@@ -17,24 +18,60 @@ class LockIn(BaseModel):
     action: str = "acquire"
 
 
+def _log_contention(conn, lock_key: str, holder: str, detail: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        """INSERT INTO contention_log(lock_key,actor,action,detail,created_at)
+           VALUES (?,?,?,?,?)""",
+        (lock_key, holder, "争用", detail, now),
+    )
+    # 争用登记必须独立落盘：随后业务异常/回滚不得抹掉这条「后到只记争用」
+    conn.commit()
+
+
 def try_acquire(conn, lock_key: str, holder: str) -> bool:
     now = datetime.now().isoformat(timespec="seconds")
     row = conn.execute(
         "SELECT holder FROM window_locks WHERE lock_key=?", (lock_key,)
     ).fetchone()
+    if row is not None and row["holder"] == holder:
+        return True
     if row is None:
-        conn.execute(
-            "INSERT INTO window_locks(lock_key,holder,acquired_at) VALUES (?,?,?)",
-            (lock_key, holder, now),
-        )
-        return True
-    if row["holder"] == holder:
-        return True
-    conn.execute(
-        """INSERT INTO contention_log(lock_key,actor,action,detail,created_at)
-           VALUES (?,?,?,?,?)""",
-        (lock_key, holder, "争用", f"持有者={row['holder']}", now),
-    )
+        try:
+            conn.execute(
+                "INSERT INTO window_locks(lock_key,holder,acquired_at) VALUES (?,?,?)",
+                (lock_key, holder, now),
+            )
+            return True
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            # 并发交错：本连接读到空快照，但先到者已插锁（UNIQUE 冲突）
+            # 或本连接持有过期快照（SQLITE_BUSY_SNAPSHOT/database is locked）。
+            # 回滚过期事务、重读确认持有者，按「后到只记争用」处理，绝不抛 500。
+            conn.rollback()
+            current = conn.execute(
+                "SELECT holder FROM window_locks WHERE lock_key=?", (lock_key,)
+            ).fetchone()
+            if current is None:
+                # 极端情况下持锁行已被释放且无主：重试一次插入；仍失败则抛给调用方
+                try:
+                    conn.execute(
+                        "INSERT INTO window_locks(lock_key,holder,acquired_at) VALUES (?,?,?)",
+                        (lock_key, holder, now),
+                    )
+                    return True
+                except (sqlite3.IntegrityError, sqlite3.OperationalError):
+                    conn.rollback()
+                    current = conn.execute(
+                        "SELECT holder FROM window_locks WHERE lock_key=?", (lock_key,)
+                    ).fetchone()
+            _log_contention(
+                conn,
+                lock_key,
+                holder,
+                f"持有者={current['holder'] if current else '未知'}（并发抢锁冲突已退化记争用：{type(exc).__name__}）",
+            )
+            return False
+    _log_contention(conn, lock_key, holder, f"持有者={row['holder']}")
     return False
 
 

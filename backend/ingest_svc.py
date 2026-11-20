@@ -17,6 +17,16 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def insert_formal_event(conn, window_id, biz_key, event_ts, amount, hold_id=None) -> int:
+    """正式窗内事件唯一写入口：入账与暂存晋升共用，保证五处同态同源。"""
+    cur = conn.execute(
+        """INSERT INTO events(window_id,biz_key,event_ts,amount,disposition,hold_id,created_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (window_id, biz_key, event_ts, amount, "窗内", hold_id, _now()),
+    )
+    return cur.lastrowid
+
+
 @router.post("/api/events")
 def ingest_event(body: EventIn, authorization: AuthHeader = None):
     user = require_user(authorization)
@@ -89,20 +99,18 @@ def ingest_event(body: EventIn, authorization: AuthHeader = None):
                 conn.commit()
                 raise HTTPException(409, "事件时间落在窗外且窗仍开启：拒收")
 
-            cur = conn.execute(
-                """INSERT INTO events(window_id,biz_key,event_ts,amount,disposition,created_at)
-                   VALUES (?,?,?,?,?,?)""",
-                (w["id"], body.biz_key, ts, body.amount, "窗内", created),
+            eid = insert_formal_event(
+                conn, w["id"], body.biz_key, ts, body.amount
             )
             write_audit(
                 conn,
                 user,
                 "ingest_in_window",
                 body.biz_key,
-                {"window_id": w["id"]},
+                {"window_id": w["id"], "event_id": eid},
             )
             conn.commit()
-            return {"disposition": "窗内", "window_id": w["id"], "event_id": cur.lastrowid}
+            return {"disposition": "窗内", "window_id": w["id"], "event_id": eid}
         finally:
             release(conn, lock_key, user)
             conn.commit()

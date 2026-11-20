@@ -1,0 +1,28 @@
+[
+  {
+    "case": "双空",
+    "desc": "暂存桶已清（hold 状态=已晋升）但正式 events 零增，审计页与 hold 列表撕裂",
+    "window_name": "W-1102",
+    "hold": {
+      "biz_key": "TEAR-EMPTY",
+      "event_ts": "2026-11-02T09:00:00",
+      "amount": 7.75,
+      "status": "已晋升"
+    },
+    "event": null
+  },
+  {
+    "case": "双挂",
+    "desc": "正式窗内事件已增但 hold 仍挂暂存，同一笔在两处都在册",
+    "window_name": "W-1102",
+    "hold": {
+      "biz_key": "TEAR-DOUBLE",
+      "event_ts": "2026-11-02T09:30:00",
+      "amount": 3.25,
+      "status": "暂存"
+    },
+    "event": {
+      "disposition": "窗内"
+    }
+  }
+]

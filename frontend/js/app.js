@@ -29,6 +29,8 @@ createApp({
     const locks = ref([]);
     const holds = ref([]);
     const dash = ref({});
+    const promotionRegistry = ref([]);
+    const crosscheck = ref({ consistent: null, violations: [] });
     const form = ref({
       window_name: "W-1102",
       biz_key: "ORD-9",
@@ -109,6 +111,12 @@ createApp({
       const hd = await api.get("/api/holds");
       if (hd === null) return;
       holds.value = Array.isArray(hd.body.items) ? hd.body.items : [];
+      const reg = await api.get("/api/holds/promotion-registry");
+      if (reg === null) return;
+      promotionRegistry.value = Array.isArray(reg.body.items) ? reg.body.items : [];
+      const xc = await api.get("/api/holds/promotion-crosscheck");
+      if (xc === null) return;
+      crosscheck.value = xc.body || { consistent: null, violations: [] };
       const d = await api.get("/api/dashboard");
       if (d === null) return;
       dash.value = d.body || {};
@@ -185,6 +193,26 @@ createApp({
       await refresh();
     }
 
+    async function promoteHold(id) {
+      actionErr.value = "";
+      const r = await api.post("/api/holds/" + id + "/promote", {});
+      if (r && !r.ok) actionErr.value = r.body.detail || "晋升失败";
+      else if (r) actionErr.value = "已按甲路径同事务晋升：正式增、暂存清";
+      await refresh();
+    }
+
+    async function promoteDraft(id, row) {
+      // 乙路径仅用于验证偏册拒写：册子已择甲时应被拒并记「晋升偏了」
+      actionErr.value = "";
+      const r = await api.post("/api/holds/" + id + "/promote-draft", {
+        biz_key: row.biz_key,
+        event_ts: row.event_ts,
+        amount: row.amount,
+      });
+      if (r && !r.ok) actionErr.value = r.body.detail || "草稿被拒";
+      await refresh();
+    }
+
     onMounted(() => {
       if (token.value) refresh();
     });
@@ -209,6 +237,8 @@ createApp({
       locks,
       holds,
       dash,
+      promotionRegistry,
+      crosscheck,
       form,
       holdForm,
       actionErr,
@@ -226,6 +256,8 @@ createApp({
       discardLate,
       partitionStub,
       createHold,
+      promoteHold,
+      promoteDraft,
       refresh,
     };
   },

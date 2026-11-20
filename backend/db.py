@@ -92,6 +92,24 @@ CREATE TABLE IF NOT EXISTS hold_staging(
   event_ts TEXT NOT NULL,
   amount REAL NOT NULL,
   status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  promoted_at TEXT
+);
+CREATE TABLE IF NOT EXISTS hold_promotion_registry(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  register_day TEXT NOT NULL UNIQUE,
+  hold_id INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS hold_promote_draft(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  hold_id INTEGER NOT NULL,
+  biz_key TEXT NOT NULL,
+  event_ts TEXT NOT NULL,
+  amount REAL NOT NULL,
+  status TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS window_locks(
@@ -250,9 +268,17 @@ def seed_if_empty(conn: sqlite3.Connection) -> None:
     )
 
 
+def _evolve_schema(conn: sqlite3.Connection) -> None:
+    """老库轻量演进：补 hold_staging.promoted_at 列（新库建表已自带）。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(hold_staging)")}
+    if "promoted_at" not in cols:
+        conn.execute("ALTER TABLE hold_staging ADD COLUMN promoted_at TEXT")
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _evolve_schema(conn)
         ensure_users(conn)
         seed_if_empty(conn)
         conn.commit()
